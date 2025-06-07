@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: memory-load
+  template:
+    metadata:
+      labels:
+        app: memory-load
+    spec:
+      containers:
+      - name: memory-stress
+        image: vish/stress
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        args:
+        - -mem-total
+        - 256M
+        - -mem-alloc-size
+        - 16M
+        - -mem-alloc-sleep
+        - 500ms
