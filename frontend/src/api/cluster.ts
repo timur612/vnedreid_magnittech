@@ -1,18 +1,29 @@
 import axios from 'axios';
 import type { ClusterStats, PodMetrics } from '../types/cluster';
+import { mockClusterStats } from '../mocks/cluster';
 
 const API_BASE_URL = 'http://misis.tech:8080/api';
 
 export const getClusterStats = async (): Promise<ClusterStats> => {
-    const { data } = await axios.get(`${API_BASE_URL}/cluster-stats`);
-    return data;
+    // Временно используем моковые данные
+    return mockClusterStats;
+    // const { data } = await axios.get(`${API_BASE_URL}/cluster-stats`);
+    // return data;
 };
 
 export const getPodMetrics = async (namespace: string, podId: string): Promise<PodMetrics> => {
-    const { data } = await axios.get(`${API_BASE_URL}/metrics`, {
-        params: { namespace, 'pod-id': podId },
-    });
-    return data;
+    // Временно используем моковые данные
+    const pod = mockClusterStats.pods.find(
+        (p) => p.namespace === namespace && p.pod_name === podId
+    );
+    if (!pod) {
+        throw new Error('Pod not found');
+    }
+    return pod;
+    // const { data } = await axios.get(`${API_BASE_URL}/metrics`, {
+    //     params: { namespace, 'pod-id': podId },
+    // });
+    // return data;
 };
 
 export const getGrafanaUrl = (podName: string, namespace: string) => {
