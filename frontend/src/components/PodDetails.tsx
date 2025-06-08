@@ -1,5 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { Text, Group, Badge, Stack, Anchor, Progress, Paper, Title, Grid } from '@mantine/core';
+import {
+    Text,
+    Group,
+    Badge,
+    Stack,
+    Anchor,
+    Progress,
+    Paper,
+    Title,
+    Grid,
+    Button,
+} from '@mantine/core';
 import { getPodMetrics, getGrafanaUrl } from '../api/cluster';
 import { formatBytes, formatCpu } from '../utils/format';
 import type { PodMetrics } from '../types/cluster';
@@ -11,14 +22,34 @@ interface PodDetailsProps {
 }
 
 export function PodDetails({ namespace, podId }: PodDetailsProps) {
+    console.log('PodDetails render:', { namespace, podId });
+
     const { data, isLoading, error } = useQuery<PodMetrics>({
         queryKey: ['podMetrics', namespace, podId],
-        queryFn: () => getPodMetrics(namespace, podId),
-        refetchInterval: 30000,
+        queryFn: async () => {
+            console.log('Fetching pod metrics:', { namespace, podId });
+            const result = await getPodMetrics(namespace, podId);
+            console.log('Pod metrics result:', result);
+            return result;
+        },
+        enabled: Boolean(namespace) && Boolean(podId),
+        retry: false,
     });
 
+    console.log('Query state:', { data, isLoading, error });
+
     if (isLoading) return <Text>Загрузка...</Text>;
-    if (error) return <Text c='red'>Ошибка при загрузке данных</Text>;
+    if (error)
+        return (
+            <Stack align='center' gap='md'>
+                <Text c='red' size='lg' fw={500}>
+                    {error instanceof Error ? error.message : 'Ошибка при загрузке данных'}
+                </Text>
+                <Button variant='light' color='blue' onClick={() => window.location.reload()}>
+                    Обновить страницу
+                </Button>
+            </Stack>
+        );
     if (!data) return null;
 
     const cpuUsagePercent = (data.current_cpu / data.max_cpu) * 100;
