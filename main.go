@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -12,6 +14,8 @@ import (
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -46,6 +50,37 @@ type ClusterStats struct {
 	TotalRecommendMem  float64      `json:"total_recommend_memory"`
 	PotentialSavings   float64      `json:"potential_savings"`
 	Pods               []PodMetrics `json:"pods"`
+}
+
+type ResourceRequest struct {
+	PodName   string  `json:"pod_name"`
+	Namespace string  `json:"namespace"`
+	CPU       float64 `json:"cpu"`     // в миллияхдрах (например, 1000m = 1 ядро)
+	Memory    float64 `json:"memory"`  // в байтах
+	Storage   float64 `json:"storage"` // в байтах
+}
+
+type DeadContainer struct {
+	PodName       string  `json:"pod_name"`
+	Namespace     string  `json:"namespace"`
+	LastActivity  string  `json:"last_activity"`
+	NetworkIn     float64 `json:"network_in_bytes"`
+	NetworkOut    float64 `json:"network_out_bytes"`
+	ContainerName string  `json:"container_name"`
+	PodType       string  `json:"pod_type"` // Тип пода (Deployment, StatefulSet и т.д.)
+}
+
+type LLMRequest struct {
+	Cluster string    `json:"cluster"`
+	Pod     string    `json:"pod"`
+	CPUData []float64 `json:"cpu_data"`
+	RAMData []float64 `json:"ram_data"`
+	CPUCost float64   `json:"cpu_cost"`
+	RAMCost float64   `json:"ram_cost"`
+}
+
+type LLMResponse struct {
+	Recommendation string `json:"recommendation"`
 }
 
 type MetricsAnalyzer struct {
@@ -86,16 +121,17 @@ func (ma *MetricsAnalyzer) getMetricsForPod(podName string, namespace string) (P
 	}
 
 	var currentCPU, currentMemory float64
-	if len(pod.Spec.Containers) > 0 {
-		if cpu := pod.Spec.Containers[0].Resources.Limits.Cpu(); cpu != nil {
-			currentCPU = float64(cpu.MilliValue()) / 1000.0
+	// Суммируем лимиты всех контейнеров в поде
+	for _, container := range pod.Spec.Containers {
+		if cpu := container.Resources.Limits.Cpu(); cpu != nil {
+			currentCPU += float64(cpu.MilliValue()) // Теперь храним в миллипроцессорах
 		}
-		if memory := pod.Spec.Containers[0].Resources.Limits.Memory(); memory != nil {
-			currentMemory = float64(memory.Value())
+		if memory := container.Resources.Limits.Memory(); memory != nil {
+			currentMemory += float64(memory.Value())
 		}
 	}
 
-	cpuQuery := `max(rate(container_cpu_usage_seconds_total{pod="` + podName + `",namespace="` + namespace + `"}[5m]) * 100)`
+	cpuQuery := `max(rate(container_cpu_usage_seconds_total{pod="` + podName + `",namespace="` + namespace + `"}[5m]) * 1000)` // Умножаем на 1000 для получения миллипроцессоров
 	cpuResult, _, err := ma.promClient.Query(context.Background(), cpuQuery, time.Now())
 	if err != nil {
 		return PodMetrics{}, err
@@ -123,7 +159,7 @@ func (ma *MetricsAnalyzer) getMetricsForPod(podName string, namespace string) (P
 	}
 
 	// Рекомендации с учетом текущих лимитов
-	recommendCPU := maxCPU / 100.0 // Конвертируем проценты в ядра
+	recommendCPU := maxCPU // Теперь уже в миллипроцессорах
 	recommendMem := maxMemory * 1.2
 
 	// Вычисляем score для сортировки (чем больше разница между текущими и рекомендуемыми ресурсами, тем выше score)
@@ -211,7 +247,7 @@ func (ma *MetricsAnalyzer) getClusterStats() (ClusterStats, error) {
 	stats.Pods = allPods
 
 	// Рассчитываем потенциальную экономию
-	cpuDelta := stats.TotalCurrentCPU - stats.TotalRecommendCPU
+	cpuDelta := (stats.TotalCurrentCPU - stats.TotalRecommendCPU) / 1000 // Конвертируем в ядра
 	memDeltaMB := (stats.TotalCurrentMemory - stats.TotalRecommendMem) / (1024 * 1024)
 	stats.PotentialSavings = (cpuDelta * ma.config.CPUCostPerCore) + (memDeltaMB * ma.config.MemoryCostPerMB)
 
@@ -224,7 +260,10 @@ func (ma *MetricsAnalyzer) formatRecommendation(metrics PodMetrics) string {
 	maxMemMB := metrics.MaxMemory / (1024 * 1024)
 	recommendMemMB := metrics.RecommendMem / (1024 * 1024)
 
-	cpuDelta := metrics.RecommendCPU - metrics.CurrentCPU
+	// Конвертируем CPU в ядра для расчёта стоимости
+	currentCPUCores := metrics.CurrentCPU / 1000
+	recommendCPUCores := metrics.RecommendCPU / 1000
+	cpuDelta := recommendCPUCores - currentCPUCores
 	memDeltaMB := recommendMemMB - currentMemMB
 	costDelta := (cpuDelta * ma.config.CPUCostPerCore) + (memDeltaMB * ma.config.MemoryCostPerMB)
 
@@ -233,15 +272,15 @@ func (ma *MetricsAnalyzer) formatRecommendation(metrics PodMetrics) string {
 	result += fmt.Sprintf("Namespace: %s\n\n", metrics.Namespace)
 
 	result += "Текущие ресурсы:\n"
-	result += fmt.Sprintf("CPU: %.2f ядер\n", metrics.CurrentCPU)
+	result += fmt.Sprintf("CPU: %.0fm (%.2f ядер)\n", metrics.CurrentCPU, currentCPUCores)
 	result += fmt.Sprintf("Память: %.2f МБ\n\n", currentMemMB)
 
 	result += "Максимальное использование:\n"
-	result += fmt.Sprintf("CPU: %.2f%%\n", metrics.MaxCPU)
+	result += fmt.Sprintf("CPU: %.0fm (%.2f ядер)\n", metrics.MaxCPU, metrics.MaxCPU/1000)
 	result += fmt.Sprintf("Память: %.2f МБ\n\n", maxMemMB)
 
 	result += "Рекомендации:\n"
-	result += fmt.Sprintf("CPU: %.2f ядер (Δ%.2f)\n", metrics.RecommendCPU, cpuDelta)
+	result += fmt.Sprintf("CPU: %.0fm (%.2f ядер) (Δ%.2f)\n", metrics.RecommendCPU, recommendCPUCores, cpuDelta)
 	result += fmt.Sprintf("Память: %.2f МБ (Δ%.2f)\n", recommendMemMB, memDeltaMB)
 
 	if costDelta < 0 {
@@ -253,115 +292,513 @@ func (ma *MetricsAnalyzer) formatRecommendation(metrics PodMetrics) string {
 	return result
 }
 
+func (ma *MetricsAnalyzer) applyRecommendations(req ResourceRequest) error {
+	// Получаем под для определения его владельца
+	pod, err := ma.k8sClient.CoreV1().Pods(req.Namespace).Get(context.Background(), req.PodName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("ошибка получения пода: %v", err)
+	}
+
+	// Получаем владельца пода (Deployment или StatefulSet)
+	var ownerRef *metav1.OwnerReference
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "ReplicaSet" || ref.Kind == "StatefulSet" {
+			ownerRef = &ref
+			break
+		}
+	}
+
+	if ownerRef == nil {
+		return fmt.Errorf("под не принадлежит Deployment или StatefulSet")
+	}
+
+	// Если под принадлежит ReplicaSet, получаем Deployment
+	if ownerRef.Kind == "ReplicaSet" {
+		rs, err := ma.k8sClient.AppsV1().ReplicaSets(req.Namespace).Get(context.Background(), ownerRef.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("ошибка получения ReplicaSet: %v", err)
+		}
+
+		// Получаем Deployment
+		for _, ref := range rs.OwnerReferences {
+			if ref.Kind == "Deployment" {
+				deployment, err := ma.k8sClient.AppsV1().Deployments(req.Namespace).Get(context.Background(), ref.Name, metav1.GetOptions{})
+				if err != nil {
+					return fmt.Errorf("ошибка получения Deployment: %v", err)
+				}
+
+				// Обновляем ресурсы в Deployment
+				for i := range deployment.Spec.Template.Spec.Containers {
+					container := &deployment.Spec.Template.Spec.Containers[i]
+
+					if req.CPU > 0 {
+						cpuQuantity := resource.NewMilliQuantity(int64(req.CPU), resource.DecimalSI)
+						container.Resources.Limits[corev1.ResourceCPU] = *cpuQuantity
+						container.Resources.Requests[corev1.ResourceCPU] = *cpuQuantity
+					}
+
+					if req.Memory > 0 {
+						memQuantity := resource.NewQuantity(int64(req.Memory), resource.BinarySI)
+						container.Resources.Limits[corev1.ResourceMemory] = *memQuantity
+						container.Resources.Requests[corev1.ResourceMemory] = *memQuantity
+					}
+
+					if req.Storage > 0 {
+						storageQuantity := resource.NewQuantity(int64(req.Storage), resource.BinarySI)
+						container.Resources.Limits[corev1.ResourceEphemeralStorage] = *storageQuantity
+						container.Resources.Requests[corev1.ResourceEphemeralStorage] = *storageQuantity
+					}
+				}
+
+				// Применяем изменения к Deployment
+				_, err = ma.k8sClient.AppsV1().Deployments(req.Namespace).Update(context.Background(), deployment, metav1.UpdateOptions{})
+				if err != nil {
+					return fmt.Errorf("ошибка обновления Deployment: %v", err)
+				}
+
+				return nil
+			}
+		}
+		return fmt.Errorf("не найден Deployment для пода")
+	}
+
+	// Если под принадлежит StatefulSet
+	if ownerRef.Kind == "StatefulSet" {
+		statefulSet, err := ma.k8sClient.AppsV1().StatefulSets(req.Namespace).Get(context.Background(), ownerRef.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("ошибка получения StatefulSet: %v", err)
+		}
+
+		// Обновляем ресурсы в StatefulSet
+		for i := range statefulSet.Spec.Template.Spec.Containers {
+			container := &statefulSet.Spec.Template.Spec.Containers[i]
+
+			if req.CPU > 0 {
+				cpuQuantity := resource.NewMilliQuantity(int64(req.CPU), resource.DecimalSI)
+				container.Resources.Limits[corev1.ResourceCPU] = *cpuQuantity
+				container.Resources.Requests[corev1.ResourceCPU] = *cpuQuantity
+			}
+
+			if req.Memory > 0 {
+				memQuantity := resource.NewQuantity(int64(req.Memory), resource.BinarySI)
+				container.Resources.Limits[corev1.ResourceMemory] = *memQuantity
+				container.Resources.Requests[corev1.ResourceMemory] = *memQuantity
+			}
+
+			if req.Storage > 0 {
+				storageQuantity := resource.NewQuantity(int64(req.Storage), resource.BinarySI)
+				container.Resources.Limits[corev1.ResourceEphemeralStorage] = *storageQuantity
+				container.Resources.Requests[corev1.ResourceEphemeralStorage] = *storageQuantity
+			}
+		}
+
+		// Применяем изменения к StatefulSet
+		_, err = ma.k8sClient.AppsV1().StatefulSets(req.Namespace).Update(context.Background(), statefulSet, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("ошибка обновления StatefulSet: %v", err)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("неподдерживаемый тип владельца пода")
+}
+
+func (ma *MetricsAnalyzer) findDeadContainers() ([]DeadContainer, error) {
+	log.Printf("Searching for dead containers in namespace default...")
+
+	var deadContainers []DeadContainer
+
+	// Получаем поды только из namespace default
+	pods, err := ma.k8sClient.CoreV1().Pods("default").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения подов в namespace default: %v", err)
+	}
+
+	for _, pod := range pods.Items {
+		// Пропускаем поды без владельца (обычно это системные поды)
+		if len(pod.OwnerReferences) == 0 {
+			continue
+		}
+
+		for _, container := range pod.Spec.Containers {
+			// Проверяем сетевую активность за последние 12 часов
+			networkQuery := fmt.Sprintf(
+				`max_over_time(rate(container_network_receive_bytes_total{pod="%s",namespace="default",container="%s"}[5m])[12h:])`,
+				pod.Name, container.Name,
+			)
+
+			networkResult, _, err := ma.promClient.Query(context.Background(), networkQuery, time.Now())
+			if err != nil {
+				log.Printf("Ошибка получения метрик сети для пода %s: %v", pod.Name, err)
+				continue
+			}
+
+			// Получаем последнюю активность
+			lastActivityQuery := fmt.Sprintf(
+				`max(container_network_receive_bytes_total{pod="%s",namespace="default",container="%s"})`,
+				pod.Name, container.Name,
+			)
+
+			lastActivityResult, _, err := ma.promClient.Query(context.Background(), lastActivityQuery, time.Now())
+			if err != nil {
+				log.Printf("Ошибка получения времени последней активности для пода %s: %v", pod.Name, err)
+				continue
+			}
+
+			var networkIn, networkOut float64
+			var lastActivity time.Time
+
+			// Обрабатываем результаты запросов
+			if networkResult.Type() == model.ValVector {
+				vector := networkResult.(model.Vector)
+				if len(vector) > 0 {
+					networkIn = float64(vector[0].Value)
+				}
+			}
+
+			if lastActivityResult.Type() == model.ValVector {
+				vector := lastActivityResult.(model.Vector)
+				if len(vector) > 0 {
+					lastActivity = vector[0].Timestamp.Time()
+				}
+			}
+
+			// Если нет сетевой активности за последние 12 часов
+			if networkIn == 0 {
+				// Получаем тип пода (Deployment, StatefulSet и т.д.)
+				podType := "Unknown"
+				if len(pod.OwnerReferences) > 0 {
+					owner := pod.OwnerReferences[0]
+					if owner.Kind == "ReplicaSet" {
+						rs, err := ma.k8sClient.AppsV1().ReplicaSets("default").Get(context.Background(), owner.Name, metav1.GetOptions{})
+						if err == nil && len(rs.OwnerReferences) > 0 {
+							podType = rs.OwnerReferences[0].Kind
+						}
+					} else {
+						podType = owner.Kind
+					}
+				}
+
+				deadContainers = append(deadContainers, DeadContainer{
+					PodName:       pod.Name,
+					Namespace:     "default",
+					LastActivity:  lastActivity.Format(time.RFC3339),
+					NetworkIn:     networkIn,
+					NetworkOut:    networkOut,
+					ContainerName: container.Name,
+					PodType:       podType,
+				})
+			}
+		}
+	}
+
+	return deadContainers, nil
+}
+
+func (ma *MetricsAnalyzer) getLLMRecommendations(podName string) (string, error) {
+	// Получаем метрики за последние 12 часов
+	cpuQuery := fmt.Sprintf(
+		`rate(container_cpu_usage_seconds_total{pod="%s",namespace="default"}[5m])[12h:] * 1000`, // Умножаем на 1000 для получения миллипроцессоров
+		podName,
+	)
+	ramQuery := fmt.Sprintf(
+		`container_memory_usage_bytes{pod="%s",namespace="default"}[12h:]`,
+		podName,
+	)
+
+	log.Printf("Executing CPU query: %s", cpuQuery)
+	cpuResult, _, err := ma.promClient.Query(context.Background(), cpuQuery, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("ошибка получения CPU метрик: %v", err)
+	}
+
+	log.Printf("Executing RAM query: %s", ramQuery)
+	ramResult, _, err := ma.promClient.Query(context.Background(), ramQuery, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("ошибка получения RAM метрик: %v", err)
+	}
+
+	// Извлекаем данные из результатов
+	var cpuData, ramData []float64
+
+	if cpuResult.Type() == model.ValMatrix {
+		matrix := cpuResult.(model.Matrix)
+		for _, stream := range matrix {
+			for _, point := range stream.Values {
+				cpuData = append(cpuData, float64(point.Value))
+			}
+		}
+	}
+	log.Printf("Collected %d CPU data points", len(cpuData))
+
+	if ramResult.Type() == model.ValMatrix {
+		matrix := ramResult.(model.Matrix)
+		for _, stream := range matrix {
+			for _, point := range stream.Values {
+				// Конвертируем байты в МБ
+				ramData = append(ramData, float64(point.Value)/1024/1024)
+			}
+		}
+	}
+	log.Printf("Collected %d RAM data points", len(ramData))
+
+	// Проверяем, что у нас есть данные
+	if len(cpuData) == 0 || len(ramData) == 0 {
+		return "", fmt.Errorf("недостаточно данных для анализа: CPU points=%d, RAM points=%d", len(cpuData), len(ramData))
+	}
+
+	// Формируем запрос к LLM сервису
+	llmRequest := LLMRequest{
+		Cluster: "default",
+		Pod:     podName,
+		CPUData: cpuData,
+		RAMData: ramData,
+		CPUCost: ma.config.CPUCostPerCore,
+		RAMCost: ma.config.MemoryCostPerMB,
+	}
+
+	// Отправляем запрос
+	jsonData, err := json.Marshal(llmRequest)
+	if err != nil {
+		return "", fmt.Errorf("ошибка сериализации запроса: %v", err)
+	}
+
+	log.Printf("Sending request to LLM service: %s", string(jsonData))
+
+	resp, err := http.Post("https://useful-kite-settled.ngrok-free.app/get_llm_rec", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("ошибка отправки запроса: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Читаем тело ответа для логирования
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("LLM service response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ошибка от сервера: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var llmResponse LLMResponse
+	if err := json.Unmarshal(body, &llmResponse); err != nil {
+		return "", fmt.Errorf("ошибка десериализации ответа: %v", err)
+	}
+
+	return llmResponse.Recommendation, nil
+}
+
+// CORS middleware
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+// Logging middleware
+func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Логируем начало запроса с параметрами
+		log.Printf("Started %s %s", r.Method, r.URL.String())
+		log.Printf("Query parameters: %v", r.URL.Query())
+
+		// Для POST запросов логируем тело
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("Error reading request body: %v", err)
+			} else {
+				log.Printf("Request body: %s", string(body))
+				// Восстанавливаем тело запроса для дальнейшего использования
+				r.Body = io.NopCloser(bytes.NewBuffer(body))
+			}
+		}
+
+		// Создаем ResponseWriter для перехвата статуса ответа
+		rw := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
+
+		next(rw, r)
+
+		// Логируем завершение запроса с кодом ответа и временем выполнения
+		log.Printf("Completed %s %s with status %d in %v",
+			r.Method,
+			r.URL.String(),
+			rw.statusCode,
+			time.Since(start))
+	}
+}
+
+// responseWriter перехватывает статус ответа
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func main() {
 	config := Config{
-		CPUCostPerCore:  1000.0, // 1000 рублей за ядро
-		MemoryCostPerMB: 0.5,    // 0.5 рублей за МБ
-		PrometheusURL:   "http://localhost:9090",
+		CPUCostPerCore:  1000.0, // Примерная стоимость ядра в рублях
+		MemoryCostPerMB: 0.1,    // Примерная стоимость МБ памяти в рублях
+		PrometheusURL:   "http://0.0.0.0:9090",
 		KubeconfigPath:  "/home/ilinivan/.kube/config",
 	}
 
 	analyzer, err := NewMetricsAnalyzer(config)
 	if err != nil {
-		log.Fatalf("Failed to create metrics analyzer: %v", err)
+		log.Fatalf("Error creating metrics analyzer: %v", err)
 	}
 
-	// JSON API
-	http.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
-		namespace := r.URL.Query().Get("namespace")
-		if namespace == "" {
-			namespace = "default"
-		}
-
-		podID := r.URL.Query().Get("pod-id")
-		w.Header().Set("Content-Type", "application/json")
-
-		if podID != "" {
-			metrics, err := analyzer.getMetricsForPod(podID, namespace)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Error getting metrics: %v", err), http.StatusInternalServerError)
-				return
-			}
-			json.NewEncoder(w).Encode(metrics)
-			return
-		}
-
-		pods, err := analyzer.k8sClient.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error getting pods: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		var podMetrics []PodMetrics
-		for _, pod := range pods.Items {
-			metrics, err := analyzer.getMetricsForPod(pod.Name, namespace)
-			if err != nil {
-				log.Printf("Error getting metrics for pod %s: %v", pod.Name, err)
-				continue
-			}
-			podMetrics = append(podMetrics, metrics)
-		}
-
-		json.NewEncoder(w).Encode(podMetrics)
-	})
-
-	// Текстовый API
-	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		namespace := r.URL.Query().Get("namespace")
-		if namespace == "" {
-			namespace = "default"
-		}
-
-		podID := r.URL.Query().Get("pod-id")
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-
-		if podID != "" {
-			metrics, err := analyzer.getMetricsForPod(podID, namespace)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Ошибка получения метрик: %v", err), http.StatusInternalServerError)
-				return
-			}
-			fmt.Fprint(w, analyzer.formatRecommendation(metrics))
-			return
-		}
-
-		pods, err := analyzer.k8sClient.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Ошибка получения списка подов: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		var response string
-		for _, pod := range pods.Items {
-			metrics, err := analyzer.getMetricsForPod(pod.Name, namespace)
-			if err != nil {
-				log.Printf("Error getting metrics for pod %s: %v", pod.Name, err)
-				continue
-			}
-			response += analyzer.formatRecommendation(metrics) + "\n---\n\n"
-		}
-
-		fmt.Fprint(w, response)
-	})
-
-	// API для статистики кластера
-	http.HandleFunc("/api/cluster-stats", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request for cluster stats")
-		w.Header().Set("Content-Type", "application/json")
+	// Старый эндпоинт для обратной совместимости
+	http.HandleFunc("/metrics", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		stats, err := analyzer.getClusterStats()
 		if err != nil {
 			log.Printf("Error getting cluster stats: %v", err)
-			http.Error(w, fmt.Sprintf("Error getting cluster stats: %v", err), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Sending cluster stats response")
-		if err := json.NewEncoder(w).Encode(stats); err != nil {
-			log.Printf("Error encoding cluster stats: %v", err)
-			http.Error(w, fmt.Sprintf("Error encoding cluster stats: %v", err), http.StatusInternalServerError)
-			return
-		}
-	})
 
-	log.Printf("Starting server on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
+	})))
+
+	// Новый эндпоинт с сортировкой
+	http.HandleFunc("/api/cluster-stats", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		stats, err := analyzer.getClusterStats()
+		if err != nil {
+			log.Printf("Error getting cluster stats: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Сортируем поды по убыванию optimization_score
+		sort.Slice(stats.Pods, func(i, j int) bool {
+			return stats.Pods[i].OptimizationScore > stats.Pods[j].OptimizationScore
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
+	})))
+
+	// Эндпоинт для получения метрик конкретного пода
+	http.HandleFunc("/api/metrics", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		namespace := r.URL.Query().Get("namespace")
+		podID := r.URL.Query().Get("pod-id")
+
+		log.Printf("Getting metrics for pod %s in namespace %s", podID, namespace)
+
+		if namespace == "" || podID == "" {
+			log.Printf("Missing required parameters: namespace=%s, pod-id=%s", namespace, podID)
+			http.Error(w, "namespace and pod-id parameters are required", http.StatusBadRequest)
+			return
+		}
+
+		metrics, err := analyzer.getMetricsForPod(podID, namespace)
+		if err != nil {
+			log.Printf("Error getting metrics for pod %s: %v", podID, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(metrics)
+	})))
+
+	http.HandleFunc("/apply-recommendations", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			log.Printf("Invalid method %s for /apply-recommendations", r.Method)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var request ResourceRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			log.Printf("Error decoding request body: %v", err)
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("Applying recommendations for pod %s in namespace %s with CPU=%f, Memory=%f, Storage=%f",
+			request.PodName, request.Namespace, request.CPU, request.Memory, request.Storage)
+
+		if request.PodName == "" || request.Namespace == "" {
+			log.Printf("Missing required fields: pod_name=%s, namespace=%s", request.PodName, request.Namespace)
+			http.Error(w, "pod_name and namespace are required", http.StatusBadRequest)
+			return
+		}
+
+		err := analyzer.applyRecommendations(request)
+		if err != nil {
+			log.Printf("Error applying recommendations for pod %s: %v", request.PodName, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": fmt.Sprintf("Ресурсы успешно обновлены для пода %s в namespace %s", request.PodName, request.Namespace),
+		})
+	})))
+
+	// Эндпоинт для поиска мертвых контейнеров
+	http.HandleFunc("/api/dead-containers", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		deadContainers, err := analyzer.findDeadContainers()
+		if err != nil {
+			log.Printf("Error finding dead containers: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(deadContainers)
+	})))
+
+	// Эндпоинт для получения рекомендаций от LLM
+	http.HandleFunc("/api/llm-recommendations", corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		podID := r.URL.Query().Get("pod-id")
+		if podID == "" {
+			http.Error(w, "pod-id parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		recommendation, err := analyzer.getLLMRecommendations(podID)
+		if err != nil {
+			log.Printf("Error getting LLM recommendations for pod %s: %v", podID, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"recommendation": recommendation,
+		})
+	})))
+
+	log.Printf("Server starting on port 8080...")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
 }
