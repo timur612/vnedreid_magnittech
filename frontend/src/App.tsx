@@ -28,6 +28,17 @@ const theme = createTheme({
                 withBorder: true,
             },
         },
+        Modal: {
+            defaultProps: {
+                centered: true,
+                size: 'xl',
+            },
+        },
+        Container: {
+            defaultProps: {
+                size: 'xl',
+            },
+        },
     },
 });
 
@@ -42,10 +53,11 @@ function App() {
                     <div
                         style={{
                             padding: '2rem',
-                            maxWidth: '1400px',
-                            margin: '0 auto',
                             backgroundColor: 'var(--mantine-color-gray-0)',
                             minHeight: '100vh',
+                            width: '100%',
+                            maxWidth: '1400px',
+                            margin: '0 auto',
                         }}
                     >
                         <PodsList />
