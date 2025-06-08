@@ -16,6 +16,7 @@ import {
     Divider,
     Loader,
     Center,
+    Box,
 } from '@mantine/core';
 import {
     getPodMetrics,
@@ -28,6 +29,7 @@ import type { PodMetrics } from '../types/cluster';
 import { IconChartBar, IconEdit, IconCheck, IconX, IconBulb } from '@tabler/icons-react';
 import { useState } from 'react';
 import { notifications } from '@mantine/notifications';
+import ReactMarkdown from 'react-markdown';
 
 interface PodDetailsProps {
     namespace: string;
@@ -266,9 +268,9 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                             </Stack>
                         </Center>
                     ) : recommendations ? (
-                        <Text style={{ whiteSpace: 'pre-line' }}>
-                            {recommendations.recommendation}
-                        </Text>
+                        <Box>
+                            <ReactMarkdown>{recommendations.recommendation}</ReactMarkdown>
+                        </Box>
                     ) : (
                         <Text c='dimmed'>Нет рекомендаций</Text>
                     )}
