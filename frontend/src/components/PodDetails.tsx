@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     Text,
     Group,
@@ -10,11 +10,17 @@ import {
     Title,
     Grid,
     Button,
+    NumberInput,
+    ActionIcon,
+    Tooltip,
+    rem,
 } from '@mantine/core';
-import { getPodMetrics, getGrafanaUrl } from '../api/cluster';
+import { getPodMetrics, getGrafanaUrl, updatePodLimits } from '../api/cluster';
 import { formatBytes, formatCpu } from '../utils/format';
 import type { PodMetrics } from '../types/cluster';
-import { IconChartBar } from '@tabler/icons-react';
+import { IconChartBar, IconEdit, IconCheck, IconX } from '@tabler/icons-react';
+import { useState } from 'react';
+import { notifications } from '@mantine/notifications';
 
 interface PodDetailsProps {
     namespace: string;
@@ -22,38 +28,54 @@ interface PodDetailsProps {
 }
 
 export function PodDetails({ namespace, podId }: PodDetailsProps) {
-    console.log('PodDetails render:', { namespace, podId });
+    const [isEditing, setIsEditing] = useState(false);
+    const [cpuLimit, setCpuLimit] = useState(0);
+    const [memoryLimit, setMemoryLimit] = useState(0);
+    const queryClient = useQueryClient();
 
     const { data, isLoading, error } = useQuery<PodMetrics>({
         queryKey: ['podMetrics', namespace, podId],
-        queryFn: async () => {
-            console.log('Fetching pod metrics:', { namespace, podId });
-            const result = await getPodMetrics(namespace, podId);
-            console.log('Pod metrics result:', result);
-            return result;
-        },
-        enabled: Boolean(namespace) && Boolean(podId),
+        queryFn: () => getPodMetrics(namespace, podId),
+        enabled: !!namespace && !!podId,
         retry: false,
     });
 
-    console.log('Query state:', { data, isLoading, error });
-
     if (isLoading) return <Text>Загрузка...</Text>;
-    if (error)
-        return (
-            <Stack align='center' gap='md'>
-                <Text c='red' size='lg' fw={500}>
-                    {error instanceof Error ? error.message : 'Ошибка при загрузке данных'}
-                </Text>
-                <Button variant='light' color='blue' onClick={() => window.location.reload()}>
-                    Обновить страницу
-                </Button>
-            </Stack>
-        );
+    if (error) return <Text c='red'>Ошибка при загрузке данных</Text>;
     if (!data) return null;
 
-    const cpuUsagePercent = (data.current_cpu / data.max_cpu) * 100;
-    const memoryUsagePercent = (data.current_memory / data.max_memory) * 100;
+    const handleEdit = () => {
+        setCpuLimit(data.recommend_cpu);
+        setMemoryLimit(data.recommend_memory);
+        setIsEditing(true);
+    };
+
+    const handleSave = async () => {
+        try {
+            await updatePodLimits(podId, namespace, cpuLimit, memoryLimit);
+            notifications.show({
+                title: 'Успех',
+                message: 'Лимиты пода успешно обновлены',
+                color: 'green',
+            });
+            setIsEditing(false);
+            queryClient.invalidateQueries({ queryKey: ['clusterStats'] });
+            queryClient.invalidateQueries({ queryKey: ['podMetrics', namespace, podId] });
+        } catch (error) {
+            notifications.show({
+                title: 'Ошибка',
+                message: 'Не удалось обновить лимиты пода',
+                color: 'red',
+            });
+        }
+    };
+
+    const handleCancel = () => {
+        setIsEditing(false);
+    };
+
+    const cpuUsagePercent = (data.max_cpu / data.current_cpu) * 100;
+    const memoryUsagePercent = (data.max_memory / data.current_memory) * 100;
 
     return (
         <Stack gap='xl'>
@@ -73,6 +95,26 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                     <Badge variant='light' color='blue'>
                         {data.namespace}
                     </Badge>
+                    {!isEditing ? (
+                        <Tooltip label='Редактировать лимиты'>
+                            <ActionIcon variant='light' color='blue' onClick={handleEdit}>
+                                <IconEdit style={{ width: rem(16), height: rem(16) }} />
+                            </ActionIcon>
+                        </Tooltip>
+                    ) : (
+                        <Group gap='xs'>
+                            <Tooltip label='Сохранить'>
+                                <ActionIcon variant='light' color='green' onClick={handleSave}>
+                                    <IconCheck style={{ width: rem(16), height: rem(16) }} />
+                                </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label='Отмена'>
+                                <ActionIcon variant='light' color='red' onClick={handleCancel}>
+                                    <IconX style={{ width: rem(16), height: rem(16) }} />
+                                </ActionIcon>
+                            </Tooltip>
+                        </Group>
+                    )}
                 </Group>
             </Group>
 
@@ -83,41 +125,53 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                             <Title order={4} c='blue.7'>
                                 CPU
                             </Title>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Текущее использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatCpu(data.current_cpu)}
-                                    </Text>
-                                </Group>
-                                <Progress
-                                    value={cpuUsagePercent}
-                                    color={data.current_cpu > data.recommend_cpu ? 'red' : 'green'}
-                                    size='md'
+                            {isEditing ? (
+                                <NumberInput
+                                    label='Лимит CPU (m)'
+                                    value={cpuLimit}
+                                    onChange={(value) => setCpuLimit(Number(value))}
+                                    min={0}
+                                    step={100}
                                 />
-                            </Stack>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Максимальное использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatCpu(data.max_cpu)}
-                                    </Text>
-                                </Group>
-                            </Stack>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Рекомендуемое использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatCpu(data.recommend_cpu)}
-                                    </Text>
-                                </Group>
-                            </Stack>
+                            ) : (
+                                <>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Текущее использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatCpu(data.max_cpu)}
+                                            </Text>
+                                        </Group>
+                                        <Progress
+                                            value={cpuUsagePercent}
+                                            color={cpuUsagePercent < 30 ? 'red' : 'green'}
+                                            size='md'
+                                        />
+                                    </Stack>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Максимальное использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatCpu(data.max_cpu)}
+                                            </Text>
+                                        </Group>
+                                    </Stack>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Рекомендуемое использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatCpu(data.recommend_cpu)}
+                                            </Text>
+                                        </Group>
+                                    </Stack>
+                                </>
+                            )}
                         </Stack>
                     </Paper>
                 </Grid.Col>
@@ -128,45 +182,53 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                             <Title order={4} c='blue.7'>
                                 Память
                             </Title>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Текущее использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatBytes(data.current_memory)}
-                                    </Text>
-                                </Group>
-                                <Progress
-                                    value={memoryUsagePercent}
-                                    color={
-                                        data.current_memory > data.recommend_memory
-                                            ? 'red'
-                                            : 'green'
-                                    }
-                                    size='md'
+                            {isEditing ? (
+                                <NumberInput
+                                    label='Лимит памяти (байт)'
+                                    value={memoryLimit}
+                                    onChange={(value) => setMemoryLimit(Number(value))}
+                                    min={0}
+                                    step={1024 * 1024}
                                 />
-                            </Stack>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Максимальное использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatBytes(data.max_memory)}
-                                    </Text>
-                                </Group>
-                            </Stack>
-                            <Stack gap='xs'>
-                                <Group justify='space-between'>
-                                    <Text size='sm' c='dimmed'>
-                                        Рекомендуемое использование
-                                    </Text>
-                                    <Text fw={500} c='blue.7'>
-                                        {formatBytes(data.recommend_memory)}
-                                    </Text>
-                                </Group>
-                            </Stack>
+                            ) : (
+                                <>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Текущее использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatBytes(data.max_memory)}
+                                            </Text>
+                                        </Group>
+                                        <Progress
+                                            value={memoryUsagePercent}
+                                            color={memoryUsagePercent < 30 ? 'red' : 'green'}
+                                            size='md'
+                                        />
+                                    </Stack>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Максимальное использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatBytes(data.max_memory)}
+                                            </Text>
+                                        </Group>
+                                    </Stack>
+                                    <Stack gap='xs'>
+                                        <Group justify='space-between'>
+                                            <Text size='sm' c='dimmed'>
+                                                Рекомендуемое использование
+                                            </Text>
+                                            <Text fw={500} c='blue.7'>
+                                                {formatBytes(data.recommend_memory)}
+                                            </Text>
+                                        </Group>
+                                    </Stack>
+                                </>
+                            )}
                         </Stack>
                     </Paper>
                 </Grid.Col>
