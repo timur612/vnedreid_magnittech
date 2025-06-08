@@ -12,7 +12,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatCpu(cpu: number): string {
-    return `${cpu.toFixed(2)} CPU`;
+    return `${cpu.toFixed(2)} CPU (m)`;
 }
 
 export function formatRubles(rubles: number): string {

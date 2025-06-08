@@ -138,7 +138,7 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                     <Paper shadow='sm' p='md' radius='md' withBorder>
                         <Stack gap='md'>
                             <Title order={4} c='blue.7'>
-                                CPU
+                                CPU (m)
                             </Title>
                             {isEditing ? (
                                 <NumberInput

@@ -61,7 +61,7 @@ export function PodsList() {
                         <Card withBorder>
                             <Stack gap='xs'>
                                 <Text size='sm' c='dimmed'>
-                                    Текущие лимиты CPU
+                                    Текущие лимиты mCPU
                                 </Text>
                                 <Text size='xl' fw={700} c='blue.7'>
                                     {formatCpu(data.total_current_cpu)}
@@ -127,7 +127,7 @@ export function PodsList() {
                             <tr>
                                 <th>Имя пода</th>
                                 <th>Namespace</th>
-                                <th>CPU</th>
+                                <th>CPU (m)</th>
                                 <th>Память</th>
                                 <th>Score</th>
                                 <th>Действия</th>
