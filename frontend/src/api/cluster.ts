@@ -1,4 +1,4 @@
-import type { ClusterStats, PodMetrics } from '../types/cluster';
+import type { ClusterStats, PodMetrics, DeadContainer } from '../types/cluster';
 
 const API_URL = 'http://misis.tech:8080';
 
@@ -49,4 +49,12 @@ export async function updatePodLimits(
 
 export function getGrafanaUrl(podName: string, namespace: string): string {
     return `http://misis.tech:3000/d/6581e46e4e5c7ba40a07646395ef7b23/kubernetes-compute-resources-pod?orgId=1&from=now-1h&to=now&timezone=utc&var-datasource=default&var-cluster=&var-namespace=${namespace}&var-pod=${podName}&refresh=10s`;
+}
+
+export async function getDeadContainers(): Promise<DeadContainer[]> {
+    const response = await fetch(`${API_URL}/api/dead-containers`);
+    if (!response.ok) {
+        throw new Error('Ошибка при получении списка мертвых контейнеров');
+    }
+    return response.json();
 }

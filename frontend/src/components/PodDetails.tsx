@@ -9,7 +9,6 @@ import {
     Paper,
     Title,
     Grid,
-    Button,
     NumberInput,
     ActionIcon,
     Tooltip,
