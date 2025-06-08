@@ -20,10 +20,10 @@ export const getPodMetrics = async (namespace: string, podId: string): Promise<P
         throw new Error('Pod not found');
     }
     return pod;
-    // const { data } = await axios.get(`${API_BASE_URL}/metrics`, {
-    //     params: { namespace, 'pod-id': podId },
-    // });
-    // return data;
+    const { data } = await axios.get(`${API_BASE_URL}/metrics`, {
+        params: { namespace, 'pod-id': podId },
+    });
+    return data;
 };
 
 export const getGrafanaUrl = (podName: string, namespace: string) => {

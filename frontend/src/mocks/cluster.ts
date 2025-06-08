@@ -1,4 +1,4 @@
-import type { ClusterStats, PodMetrics } from '../types/cluster';
+import type { ClusterStats } from '../types/cluster';
 
 export const mockClusterStats: ClusterStats = {
     total_pods: 5,
