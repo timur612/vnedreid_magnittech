@@ -6,9 +6,9 @@ const API_BASE_URL = 'http://misis.tech:8080/api';
 
 export const getClusterStats = async (): Promise<ClusterStats> => {
     // Временно используем моковые данные
-    return mockClusterStats;
-    // const { data } = await axios.get(`${API_BASE_URL}/cluster-stats`);
-    // return data;
+    // return mockClusterStats;
+    const { data } = await axios.get(`${API_BASE_URL}/cluster-stats`);
+    return data;
 };
 
 export const getPodMetrics = async (namespace: string, podId: string): Promise<PodMetrics> => {
@@ -19,7 +19,7 @@ export const getPodMetrics = async (namespace: string, podId: string): Promise<P
     if (!pod) {
         throw new Error('Pod not found');
     }
-    return pod;
+    // return pod;
     const { data } = await axios.get(`${API_BASE_URL}/metrics`, {
         params: { namespace, 'pod-id': podId },
     });
