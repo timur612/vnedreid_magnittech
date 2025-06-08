@@ -21,6 +21,32 @@ export async function getPodMetrics(namespace: string, podId: string): Promise<P
     return response.json();
 }
 
+export async function updatePodLimits(
+    podName: string,
+    namespace: string,
+    cpu: number,
+    memory: number
+): Promise<{ message: string; status: string }> {
+    const response = await fetch(`${API_URL}/apply-recommendations`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            pod_name: podName,
+            namespace,
+            cpu,
+            memory,
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error('Ошибка при обновлении лимитов пода');
+    }
+
+    return response.json();
+}
+
 export function getGrafanaUrl(podName: string, namespace: string): string {
     return `http://misis.tech:3000/d/6581e46e4e5c7ba40a07646395ef7b23/kubernetes-compute-resources-pod?orgId=1&from=now-1h&to=now&timezone=utc&var-datasource=default&var-cluster=&var-namespace=${namespace}&var-pod=${podName}&refresh=10s`;
 }
