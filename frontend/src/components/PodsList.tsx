@@ -161,13 +161,13 @@ export function PodsList() {
                                         <td>
                                             <Stack gap={4}>
                                                 <Text size='sm'>
-                                                    {formatCpu(pod.current_cpu)} /{' '}
-                                                    {formatCpu(pod.max_cpu)}
+                                                    {formatCpu(pod.max_cpu)} /{' '}
+                                                    {formatCpu(pod.current_cpu)}
                                                 </Text>
                                                 <Progress
-                                                    value={(pod.current_cpu / pod.max_cpu) * 100}
+                                                    value={(pod.max_cpu / pod.current_cpu) * 100}
                                                     color={
-                                                        pod.current_cpu > pod.recommend_cpu
+                                                        (pod.max_cpu / pod.current_cpu) * 100 < 30
                                                             ? 'red'
                                                             : 'green'
                                                     }
@@ -178,15 +178,17 @@ export function PodsList() {
                                         <td>
                                             <Stack gap={4}>
                                                 <Text size='sm'>
-                                                    {formatBytes(pod.current_memory)} /{' '}
-                                                    {formatBytes(pod.max_memory)}
+                                                    {formatBytes(pod.max_memory)} /{' '}
+                                                    {formatBytes(pod.current_memory)}
                                                 </Text>
                                                 <Progress
                                                     value={
-                                                        (pod.current_memory / pod.max_memory) * 100
+                                                        (pod.max_memory / pod.current_memory) * 100
                                                     }
                                                     color={
-                                                        pod.current_memory > pod.recommend_memory
+                                                        (pod.max_memory / pod.current_memory) *
+                                                            100 <
+                                                        30
                                                             ? 'red'
                                                             : 'green'
                                                     }
