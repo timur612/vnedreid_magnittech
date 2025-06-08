@@ -58,3 +58,11 @@ export async function getDeadContainers(): Promise<DeadContainer[]> {
     }
     return response.json();
 }
+
+export async function getLlmRecommendations(podId: string): Promise<{ recommendation: string }> {
+    const response = await fetch(`${API_URL}/api/llm-recommendations?pod-id=${podId}`);
+    if (!response.ok) {
+        throw new Error('Ошибка при получении рекомендаций');
+    }
+    return response.json();
+}

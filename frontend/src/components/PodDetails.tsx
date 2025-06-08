@@ -13,11 +13,19 @@ import {
     ActionIcon,
     Tooltip,
     rem,
+    Divider,
+    Loader,
+    Center,
 } from '@mantine/core';
-import { getPodMetrics, getGrafanaUrl, updatePodLimits } from '../api/cluster';
+import {
+    getPodMetrics,
+    getGrafanaUrl,
+    updatePodLimits,
+    getLlmRecommendations,
+} from '../api/cluster';
 import { formatBytes, formatCpu } from '../utils/format';
 import type { PodMetrics } from '../types/cluster';
-import { IconChartBar, IconEdit, IconCheck, IconX } from '@tabler/icons-react';
+import { IconChartBar, IconEdit, IconCheck, IconX, IconBulb } from '@tabler/icons-react';
 import { useState } from 'react';
 import { notifications } from '@mantine/notifications';
 
@@ -37,6 +45,12 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
         queryFn: () => getPodMetrics(namespace, podId),
         enabled: !!namespace && !!podId,
         retry: false,
+    });
+
+    const { data: recommendations, isLoading: isLoadingRecommendations } = useQuery({
+        queryKey: ['llmRecommendations', podId],
+        queryFn: () => getLlmRecommendations(podId),
+        enabled: !!podId,
     });
 
     if (isLoading) return <Text>Загрузка...</Text>;
@@ -232,6 +246,34 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                     </Paper>
                 </Grid.Col>
             </Grid>
+
+            <Paper shadow='sm' p='md' radius='md' withBorder>
+                <Stack gap='md'>
+                    <Group>
+                        <IconBulb size={24} color='yellow' />
+                        <Title order={4} c='yellow.7'>
+                            Рекомендации AI
+                        </Title>
+                    </Group>
+                    <Divider />
+                    {isLoadingRecommendations ? (
+                        <Center py='xl'>
+                            <Stack align='center' gap='xs'>
+                                <Loader size='sm' color='yellow' />
+                                <Text size='sm' c='dimmed'>
+                                    Загрузка рекомендаций...
+                                </Text>
+                            </Stack>
+                        </Center>
+                    ) : recommendations ? (
+                        <Text style={{ whiteSpace: 'pre-line' }}>
+                            {recommendations.recommendation}
+                        </Text>
+                    ) : (
+                        <Text c='dimmed'>Нет рекомендаций</Text>
+                    )}
+                </Stack>
+            </Paper>
 
             <Anchor
                 href={getGrafanaUrl(data.pod_name, data.namespace)}
