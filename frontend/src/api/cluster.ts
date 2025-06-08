@@ -1,6 +1,6 @@
 import type { ClusterStats, PodMetrics, DeadContainer } from '../types/cluster';
 
-const API_URL = 'http://misis.tech:8080';
+const API_URL = 'https://api.misis.tech';
 
 export async function getClusterStats(): Promise<ClusterStats> {
     const response = await fetch(`${API_URL}/api/cluster-stats`);
