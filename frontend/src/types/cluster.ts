@@ -21,3 +21,13 @@ export interface ClusterStats {
     potential_savings: number;
     pods: PodMetrics[];
 }
+
+export interface DeadContainer {
+    pod_name: string;
+    namespace: string;
+    last_activity: string;
+    network_in_bytes: number;
+    network_out_bytes: number;
+    container_name: string;
+    pod_type: string;
+}
