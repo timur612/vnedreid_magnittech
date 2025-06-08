@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-analyzer
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-analyzer
+  template:
+    metadata:
+      labels:
+        app: metrics-analyzer
+    spec:
+      containers:
+      - name: metrics-analyzer
+        image: metrics-analyzer:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PROMETHEUS_URL
+          value: "http://prometheus-server:9090"
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /root/.kube
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: kubeconfig
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-analyzer
+  namespace: monitoring
+spec:
+  selector:
+    app: metrics-analyzer
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP 
