@@ -1,6 +1,6 @@
 import type { ClusterStats, PodMetrics, DeadContainer } from '../types/cluster';
 
-const API_URL = 'http://misis.tech:8080';
+const API_URL = 'https://api.misis.tech';
 
 export async function getClusterStats(): Promise<ClusterStats> {
     const response = await fetch(`${API_URL}/api/cluster-stats`);
@@ -55,6 +55,14 @@ export async function getDeadContainers(): Promise<DeadContainer[]> {
     const response = await fetch(`${API_URL}/api/dead-containers`);
     if (!response.ok) {
         throw new Error('Ошибка при получении списка мертвых контейнеров');
+    }
+    return response.json();
+}
+
+export async function getLlmRecommendations(podId: string): Promise<{ recommendation: string }> {
+    const response = await fetch(`${API_URL}/api/llm-recommendations?pod-id=${podId}`);
+    if (!response.ok) {
+        throw new Error('Ошибка при получении рекомендаций');
     }
     return response.json();
 }
