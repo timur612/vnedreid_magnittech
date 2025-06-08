@@ -18,7 +18,7 @@ import {
 } from '@mantine/core';
 import { useState } from 'react';
 import { getClusterStats, getGrafanaUrl } from '../api/cluster';
-import { formatBytes, formatCpu } from '../utils/format';
+import { formatBytes, formatCpu, formatRubles } from '../utils/format';
 import { PodDetails } from './PodDetails';
 import type { PodMetrics } from '../types/cluster';
 import { IconChartBar, IconInfoCircle } from '@tabler/icons-react';
@@ -28,7 +28,8 @@ export function PodsList() {
     const { data, isLoading, error } = useQuery({
         queryKey: ['clusterStats'],
         queryFn: getClusterStats,
-        refetchInterval: 30000,
+        refetchInterval: false,
+        staleTime: Infinity,
     });
 
     if (isLoading) return <Text>Загрузка...</Text>;
@@ -103,7 +104,7 @@ export function PodsList() {
                                     Потенциальная экономия
                                 </Text>
                                 <Text size='xl' fw={700} c='blue.7'>
-                                    {formatCpu(data.potential_savings)}
+                                    {formatRubles(data.potential_savings)}
                                 </Text>
                             </Stack>
                         </Card>
