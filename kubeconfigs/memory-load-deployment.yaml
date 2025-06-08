@@ -13,19 +13,22 @@ spec:
         app: memory-load
     spec:
       containers:
-      - name: memory-stress
-        image: vish/stress
+      - name: memory-load-container
+        image: python:3.11-alpine
         resources:
           requests:
-            cpu: "200m"
             memory: "256Mi"
+            cpu: "200m"
           limits:
-            cpu: "500m"
             memory: "512Mi"
+            cpu: "500m"
+        command: ["python", "-c"]
         args:
-        - -mem-total
-        - 256M
-        - -mem-alloc-size
-        - 16M
-        - -mem-alloc-sleep
-        - 500ms
+          - |
+            import time
+            data = []
+            while True:
+                data.extend([0]*10**6)
+                if len(data) > 50*10**6:
+                    data = []
+                time.sleep(2)
