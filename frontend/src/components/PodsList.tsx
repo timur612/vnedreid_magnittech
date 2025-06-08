@@ -61,7 +61,7 @@ export function PodsList() {
                         <Card withBorder>
                             <Stack gap='xs'>
                                 <Text size='sm' c='dimmed'>
-                                    Текущее использование CPU
+                                    Текущие лимиты CPU
                                 </Text>
                                 <Text size='xl' fw={700} c='blue.7'>
                                     {formatCpu(data.total_current_cpu)}
@@ -80,7 +80,7 @@ export function PodsList() {
                         <Card withBorder>
                             <Stack gap='xs'>
                                 <Text size='sm' c='dimmed'>
-                                    Текущее использование памяти
+                                    Текущие лимиты памяти
                                 </Text>
                                 <Text size='xl' fw={700} c='blue.7'>
                                     {formatBytes(data.total_current_memory)}
@@ -134,91 +134,102 @@ export function PodsList() {
                             </tr>
                         </thead>
                         <tbody>
-                            {data.pods.map((pod) => (
-                                <tr
-                                    key={pod.pod_name}
-                                    style={{
-                                        backgroundColor:
-                                            selectedPod?.pod_name === pod.pod_name
-                                                ? 'var(--mantine-color-blue-0)'
-                                                : undefined,
-                                        cursor: 'pointer',
-                                    }}
-                                    onClick={() => setSelectedPod(pod)}
-                                >
-                                    <td>
-                                        <Text fw={500}>{pod.pod_name}</Text>
-                                    </td>
-                                    <td>
-                                        <Badge variant='light' color='blue'>
-                                            {pod.namespace}
-                                        </Badge>
-                                    </td>
-                                    <td>
-                                        <Stack gap={4}>
-                                            <Text size='sm'>
-                                                {formatCpu(pod.current_cpu)} /{' '}
-                                                {formatCpu(pod.max_cpu)}
-                                            </Text>
-                                            <Progress
-                                                value={(pod.current_cpu / pod.max_cpu) * 100}
+                            {data.pods
+                                .filter(
+                                    (pod) => (pod.max_cpu ?? 0) > 0 && (pod.max_memory ?? 0) > 0
+                                )
+                                .map((pod) => (
+                                    <tr
+                                        key={pod.pod_name}
+                                        style={{
+                                            backgroundColor:
+                                                selectedPod?.pod_name === pod.pod_name
+                                                    ? 'var(--mantine-color-blue-0)'
+                                                    : undefined,
+                                            cursor: 'pointer',
+                                        }}
+                                        onClick={() => setSelectedPod(pod)}
+                                    >
+                                        <td>
+                                            <Text fw={500}>{pod.pod_name}</Text>
+                                        </td>
+                                        <td>
+                                            <Badge variant='light' color='blue'>
+                                                {pod.namespace}
+                                            </Badge>
+                                        </td>
+                                        <td>
+                                            <Stack gap={4}>
+                                                <Text size='sm'>
+                                                    {formatCpu(pod.current_cpu)} /{' '}
+                                                    {formatCpu(pod.max_cpu)}
+                                                </Text>
+                                                <Progress
+                                                    value={(pod.current_cpu / pod.max_cpu) * 100}
+                                                    color={
+                                                        pod.current_cpu > pod.recommend_cpu
+                                                            ? 'red'
+                                                            : 'green'
+                                                    }
+                                                    size='sm'
+                                                />
+                                            </Stack>
+                                        </td>
+                                        <td>
+                                            <Stack gap={4}>
+                                                <Text size='sm'>
+                                                    {formatBytes(pod.current_memory)} /{' '}
+                                                    {formatBytes(pod.max_memory)}
+                                                </Text>
+                                                <Progress
+                                                    value={
+                                                        (pod.current_memory / pod.max_memory) * 100
+                                                    }
+                                                    color={
+                                                        pod.current_memory > pod.recommend_memory
+                                                            ? 'red'
+                                                            : 'green'
+                                                    }
+                                                    size='sm'
+                                                />
+                                            </Stack>
+                                        </td>
+                                        <td>
+                                            <Badge
                                                 color={
-                                                    pod.current_cpu > pod.recommend_cpu
-                                                        ? 'red'
-                                                        : 'green'
+                                                    pod.optimization_score > 0.7 ? 'green' : 'red'
                                                 }
-                                                size='sm'
-                                            />
-                                        </Stack>
-                                    </td>
-                                    <td>
-                                        <Stack gap={4}>
-                                            <Text size='sm'>
-                                                {formatBytes(pod.current_memory)} /{' '}
-                                                {formatBytes(pod.max_memory)}
-                                            </Text>
-                                            <Progress
-                                                value={(pod.current_memory / pod.max_memory) * 100}
-                                                color={
-                                                    pod.current_memory > pod.recommend_memory
-                                                        ? 'red'
-                                                        : 'green'
-                                                }
-                                                size='sm'
-                                            />
-                                        </Stack>
-                                    </td>
-                                    <td>
-                                        <Badge
-                                            color={pod.optimization_score > 0.7 ? 'green' : 'red'}
-                                            variant='light'
-                                        >
-                                            {pod.optimization_score.toFixed(2)}
-                                        </Badge>
-                                    </td>
-                                    <td>
-                                        <Group gap='xs'>
-                                            <Tooltip label='Открыть в Grafana'>
-                                                <ActionIcon
-                                                    variant='light'
-                                                    color='blue'
-                                                    component='a'
-                                                    href={getGrafanaUrl(
-                                                        pod.pod_name,
-                                                        pod.namespace
-                                                    )}
-                                                    target='_blank'
-                                                    onClick={(e) => e.stopPropagation()}
-                                                >
-                                                    <IconChartBar
-                                                        style={{ width: rem(16), height: rem(16) }}
-                                                    />
-                                                </ActionIcon>
-                                            </Tooltip>
-                                        </Group>
-                                    </td>
-                                </tr>
-                            ))}
+                                                variant='light'
+                                            >
+                                                {pod.optimization_score.toFixed(2)}
+                                            </Badge>
+                                        </td>
+                                        <td>
+                                            <Group gap='xs'>
+                                                <Tooltip label='Открыть в Grafana'>
+                                                    <ActionIcon
+                                                        variant='light'
+                                                        color='blue'
+                                                        component='a'
+                                                        href={getGrafanaUrl(
+                                                            pod.pod_name,
+                                                            pod.namespace
+                                                        )}
+                                                        target='_blank'
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        <IconChartBar
+                                                            style={{
+                                                                width: rem(16),
+                                                                height: rem(16),
+                                                            }}
+                                                        />
+                                                    </ActionIcon>
+                                                </Tooltip>
+                                            </Group>
+                                        </td>
+                                    </tr>
+                                ))}
                         </tbody>
                     </Table>
                 </Paper>

@@ -86,7 +86,7 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                             <Stack gap='xs'>
                                 <Group justify='space-between'>
                                     <Text size='sm' c='dimmed'>
-                                        Текущее использование
+                                        Текущие лимиты
                                     </Text>
                                     <Text fw={500} c='blue.7'>
                                         {formatCpu(data.current_cpu)}
@@ -131,7 +131,7 @@ export function PodDetails({ namespace, podId }: PodDetailsProps) {
                             <Stack gap='xs'>
                                 <Group justify='space-between'>
                                     <Text size='sm' c='dimmed'>
-                                        Текущее использование
+                                        Текущие лимиты
                                     </Text>
                                     <Text fw={500} c='blue.7'>
                                         {formatBytes(data.current_memory)}
